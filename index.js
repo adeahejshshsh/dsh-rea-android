@@ -76,6 +76,14 @@ const DEFAULTS = {
 
 // --------------------------------------------------------- MCP stdio 客户端
 
+/** 归一化「逗号分隔的 analyzer 名」：去空白、丢空项。配置与按次参数都走它。 */
+const normalizeAnalyzers = (value) =>
+  String(value ?? "")
+    .split(",")
+    .map((name) => name.trim())
+    .filter((name) => name !== "")
+    .join(",");
+
 class ReaMcpClient {
   #proc = null;
   #buffer = "";
@@ -106,6 +114,30 @@ class ReaMcpClient {
 
   get alive() {
     return this.#ready && this.#proc !== null && this.#proc.exitCode === null;
+  }
+
+  /**
+   * 换掉「分析器裁剪」设置，并丢弃当前 REA 会话。
+   *
+   * 为什么只能靠重启：REA 的 `GhidraLauncher` 是在**子进程内部**读 `process.env` 拼 Ghidra 命令行的，
+   * 而 env 在 spawn 那一刻就固定了 —— 常驻进程里改不动。所以想让 `rea_call` 按次调裁剪，
+   * 只能把子进程换掉。代价是当前打开的目标连分析结果一起丢（反正换目标也要重新分析）。
+   */
+  async restart(trimAnalyzers) {
+    this.ghidraTrimAnalyzers = String(trimAnalyzers ?? "");
+    const proc = this.#proc;
+    this.#proc = null;
+    this.#ready = false;
+    this.#toolCache = null;
+    this.#failAll(new Error("rea: client restarted for a new analyzer-trim setting"));
+    if (proc !== null && proc.exitCode === null) {
+      try {
+        proc.kill("SIGTERM");
+      } catch {
+        /* 已经没了 */
+      }
+    }
+    await this.#ensure();
   }
 
   async #ensure() {
@@ -159,7 +191,7 @@ class ReaMcpClient {
         if (this.#stderrTail.length > 40) this.#stderrTail.shift();
       }
     });
-    proc.on("exit", (code, signal) => this.#onExit(code, signal));
+    proc.on("exit", (code, signal) => this.#onExit(proc, code, signal));
     proc.on("error", (error) => {
       this.#failAll(new Error(`rea: spawn failed: ${String(error?.message ?? error)}`));
       this.#ready = false;
@@ -224,7 +256,9 @@ class ReaMcpClient {
     }
   }
 
-  #onExit(code, signal) {
+  #onExit(proc, code, signal) {
+    // 被 restart() 换掉的旧进程退出时已经不是当前进程了：别让它把新会话的状态清掉。
+    if (this.#proc !== proc) return;
     const wasReady = this.#ready;
     this.#ready = false;
     this.#proc = null;
@@ -416,11 +450,7 @@ export function apply(ctx, config = {}) {
   const javaHome = resolveJavaHome(settings);
   const ghidraStartupTimeoutMs = Number(settings.ghidraStartupTimeoutMs) || 0;
   // 逗号分隔的 analyzer 名；空 = 不动 Ghidra 默认集合。
-  const ghidraTrimAnalyzers = String(settings.ghidraTrimAnalyzers ?? "")
-    .split(",")
-    .map((name) => name.trim())
-    .filter((name) => name !== "")
-    .join(",");
+  const ghidraTrimAnalyzers = normalizeAnalyzers(settings.ghidraTrimAnalyzers);
 
   try {
     if (reaEntry === "") {
@@ -570,7 +600,9 @@ export function apply(ctx, config = {}) {
             startupTimeoutMs: ghidraStartupTimeoutMs || null,
             // 分析器裁剪：hook = 钩子已装（不等于已裁剪），analyzers 才是实际关掉的那些。
             trimHook: trim.patched && trim.script,
-            trimAnalyzers: ghidraTrimAnalyzers === "" ? null : ghidraTrimAnalyzers.split(","),
+            // 当前生效值（可能被 rea_call 的 trimAnalyzers 按次改过），以及配置里的初始值。
+            trimAnalyzers: client.ghidraTrimAnalyzers === "" ? null : client.ghidraTrimAnalyzers.split(","),
+            trimAnalyzersConfigured: ghidraTrimAnalyzers === "" ? null : ghidraTrimAnalyzers.split(","),
             ready: ghidraInstallDir !== "" && native.present && patched && javaHome !== "",
           };
         })(),
@@ -677,6 +709,13 @@ export function apply(ctx, config = {}) {
             "大目标先调大配置里的 ghidraStartupTimeoutMs，这里会自动跟着放宽。",
         },
         maxBytes: { type: "number", description: "返回截断上限（字节），默认 80000。" },
+        trimAnalyzers: {
+          type: "string",
+          description:
+            "按次调整 Ghidra 分析器裁剪（逗号分隔；空字符串 = 恢复 Ghidra 默认集合）。" +
+            "与当前设置不同时会重启 REA 子进程 —— 当前打开的目标及其分析结果会被丢弃，" +
+            "所以要在 open_binary 之前设。大目标建议 'Stack,Basic Constant Reference Analyzer'（省 2.5×）。",
+        },
       },
       required: ["tool"],
       additionalProperties: false,
@@ -687,6 +726,15 @@ export function apply(ctx, config = {}) {
       requireEntry();
       const tool = typeof args?.tool === "string" ? args.tool.trim() : "";
       if (tool === "") return "请给出 tool（先用 rea_tools 查工具名）。";
+      // 按次调整分析器裁剪：env 在 spawn 时固定，所以只能重启子进程换掉它。
+      const requestedTrim = typeof args?.trimAnalyzers === "string" ? normalizeAnalyzers(args.trimAnalyzers) : null;
+      let trimNote = "";
+      if (requestedTrim !== null && requestedTrim !== client.ghidraTrimAnalyzers) {
+        await client.restart(requestedTrim);
+        trimNote =
+          `已把分析器裁剪切到「${requestedTrim === "" ? "Ghidra 默认集合" : requestedTrim}」并重启了 REA 会话；` +
+          "此前打开的目标及其分析结果已丢弃，新设置在下一次 open_binary 触发分析时生效。\n";
+      }
       const timeoutMs =
         Number.isFinite(Number(args?.timeoutMs)) && Number(args.timeoutMs) > 0
           ? Number(args.timeoutMs)
@@ -700,7 +748,7 @@ export function apply(ctx, config = {}) {
         result = await client.call(tool, args?.arguments ?? {}, timeoutMs);
       } catch (error) {
         const tail = client.stderrTail().join("\n");
-        return `REA 调用失败：${String(error?.message ?? error)}${
+        return `${trimNote}REA 调用失败：${String(error?.message ?? error)}${
           tail === "" ? "" : `\n--- REA stderr 尾部 ---\n${truncate(tail, 4_000)}`
         }`;
       }
@@ -711,7 +759,7 @@ export function apply(ctx, config = {}) {
         )
         .join("\n");
       const flag = result?.isError === true ? "REA 报告该调用为错误结果：\n" : "";
-      return flag + truncate(text === "" ? "(空结果)" : text, maxBytes);
+      return trimNote + flag + truncate(text === "" ? "(空结果)" : text, maxBytes);
     },
   });
 

@@ -432,6 +432,26 @@ ghidraTrimAnalyzers: 'Stack,Basic Constant Reference Analyzer'
 **默认是空的**（Ghidra 默认集合，行为一字不变）——因为这会让伪代码的注释变少，
 该不该吃这个亏由你定。`rea_status` 的 `ghidra.trimAnalyzers` 会显示当前实际关掉了哪些。
 
+#### 按次调整（不用改配置、不用重启 DSH）
+
+`rea_call` 多了一个顶层参数 `trimAnalyzers`（**不是** REA 工具的入参，不会转给 REA）：
+
+```
+rea_call { tool: "open_binary", arguments: { path: "<大目标>" },
+           trimAnalyzers: "Stack,Basic Constant Reference Analyzer" }
+rea_call { tool: "open_binary", arguments: { path: "<小目标>" }, trimAnalyzers: "" }   # 恢复默认
+```
+
+- 与当前值**相同**时什么都不做（不会白白重启）；
+- 与当前值**不同**时，插件会**重启 REA 子进程**再继续这次调用，返回里会带一行说明。
+
+**为什么必须重启**：REA 的 `GhidraLauncher` 是在**子进程内部**读 `process.env` 拼 Ghidra 命令行的，
+env 在 spawn 那一刻就固定了，常驻进程里改不动。所以按次调整只能换进程 —— **代价是当前打开的目标
+及其分析结果一起丢**（反正换目标也要重新分析）。要避免这个代价就在 `open_binary` 之前设。
+
+> 只走 `rea_cli` 的场景不需要这个参数：`rea_cli` 每次都是新进程，直接用
+> `extraEnv: { "REA_GHIDRA_TRIM_ANALYZERS": "Stack,Basic Constant Reference Analyzer" }` 即可。
+
 机制：插件把 `bridge/ReaGhidraTrimAnalyzers.java` 投放到 REA 的 `bridge/ghidra/`（那个目录
 本来就在 `-scriptPath` 上），并给 REA 的 `GhidraLauncher` 插一个 `-preScript`；脚本在
 「导入之后、自动分析之前」把 `Program.ANALYSIS_PROPERTIES` 里对应的开关置 false。
