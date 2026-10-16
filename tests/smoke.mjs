@@ -8,6 +8,8 @@
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { effectiveCallTimeoutMs } from "../lib/paths.mjs";
+
 const PLUGIN_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
 
 const registered = new Map();
@@ -48,6 +50,16 @@ const check = (label, condition, detail = "") => {
 };
 
 check("注册了 4 个工具", registered.size === 4, `实际 ${registered.size}: ${[...registered.keys()].join(", ")}`);
+
+// 工具层超时：默认值不能比 REA 自己的 Ghidra 启动预算（330 s）更紧，否则冷启动的
+// batch_decompile 永远只报「rea: tools/call timed out」，看不到 REA 的真实结论。
+check("默认超时不低于 REA 的 Ghidra 启动预算",
+  effectiveCallTimeoutMs({ callTimeoutMs: 300_000, ghidraStartupTimeoutMs: 0 }) === 330_000,
+  `实际 ${effectiveCallTimeoutMs({ callTimeoutMs: 300_000, ghidraStartupTimeoutMs: 0 })}`);
+check("抬 ghidraStartupTimeoutMs 时工具层跟着抬",
+  effectiveCallTimeoutMs({ callTimeoutMs: 300_000, ghidraStartupTimeoutMs: 10_800_000 }) === 10_800_000);
+check("callTimeoutMs 更大时以它为准",
+  effectiveCallTimeoutMs({ callTimeoutMs: 900_000, ghidraStartupTimeoutMs: 0 }) === 900_000);
 
 const status = await call("rea_status", {});
 process.stdout.write(`\n--- rea_status ---\n${status}\n\n`);

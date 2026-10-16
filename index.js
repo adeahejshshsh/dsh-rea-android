@@ -32,6 +32,7 @@ import {
   applyExecPathPatch,
   applyGhidraPatch,
   applyJadxHostGatePatch,
+  effectiveCallTimeoutMs,
   ghidraNativeState,
   ghidraPatchState,
   jadxGateState,
@@ -635,7 +636,14 @@ export function apply(ctx, config = {}) {
           additionalProperties: true,
           description: "该工具的入参对象（字段名见 rea_tools 输出）。",
         },
-        timeoutMs: { type: "number", description: "超时毫秒，默认 300000（手机上大分析会慢）。" },
+        timeoutMs: {
+          type: "number",
+          description:
+            "超时毫秒。默认 = max(callTimeoutMs, ghidraStartupTimeoutMs)，下限 330000（REA 自己的 Ghidra 启动预算）。" +
+            "成本主要在 Ghidra 冷启动：batch_decompile 热起来只要约 8 ms/地址，但它常常是 open_binary 之后" +
+            "第一个取数的调用，会背上整个冷启动（265 KB 的 .so 约 28 s，16.8 MB 的 .so 实测 508 s）。" +
+            "大目标先调大配置里的 ghidraStartupTimeoutMs，这里会自动跟着放宽。",
+        },
         maxBytes: { type: "number", description: "返回截断上限（字节），默认 80000。" },
       },
       required: ["tool"],
@@ -650,7 +658,7 @@ export function apply(ctx, config = {}) {
       const timeoutMs =
         Number.isFinite(Number(args?.timeoutMs)) && Number(args.timeoutMs) > 0
           ? Number(args.timeoutMs)
-          : Number(settings.callTimeoutMs);
+          : effectiveCallTimeoutMs(settings);
       const maxBytes =
         Number.isFinite(Number(args?.maxBytes)) && Number(args.maxBytes) > 0
           ? Number(args.maxBytes)
@@ -691,7 +699,10 @@ export function apply(ctx, config = {}) {
           description: '命令行参数数组，如 ["capabilities"] 或 ["analyze-javascript-application","/abs/path","--format","json"]。',
         },
         cwd: { type: "string", description: "工作目录（可选）。" },
-        timeoutMs: { type: "number", description: "超时毫秒，默认 300000。" },
+        timeoutMs: {
+          type: "number",
+          description: "超时毫秒。默认 = max(callTimeoutMs, ghidraStartupTimeoutMs)，下限 330000（覆盖 Ghidra 冷启动）。",
+        },
         maxBytes: { type: "number", description: "输出截断上限（字节），默认 80000。" },
         extraEnv: {
           type: "object",
@@ -711,7 +722,7 @@ export function apply(ctx, config = {}) {
       const timeoutMs =
         Number.isFinite(Number(args?.timeoutMs)) && Number(args.timeoutMs) > 0
           ? Number(args.timeoutMs)
-          : Number(settings.callTimeoutMs);
+          : effectiveCallTimeoutMs(settings);
       const maxBytes =
         Number.isFinite(Number(args?.maxBytes)) && Number(args.maxBytes) > 0
           ? Number(args.maxBytes)

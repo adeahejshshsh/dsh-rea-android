@@ -142,9 +142,39 @@ node <插件目录>/tests/smoke.mjs
 |---|---|
 | `REA 未安装或入口未解析` | 跑 `node setup.mjs`，或设 `config.reaEntry` |
 | `rea_call` 报连接错误 | `rea_status` 看 `mcpConnected`；把 `log: true` 打开看 spawn/重连日志；stderr 尾部会附在错误里 |
-| 工具调用超时 | 调大 `rea_call` 的 `timeoutMs`（手机上大分析很慢，默认 300 s） |
+| 工具调用超时 | 先看报的是哪一层（见下节）。冷启动/大目标要调大 `ghidraStartupTimeoutMs`，不要只调 `rea_call` 的 `timeoutMs` |
 | 结果被截断 | 调大 `maxBytes`，或改用 `rea_cli` 落盘后再读文件 |
 | 补丁没生效 | `rea_status` 的 `androidExecPathPatch.complete` 必须是 true；外部安装需 `allowPatchOutsideVendor: true` |
+
+### `batch_decompile` 为什么老超时
+
+**不是批量太大。** 实测（265 KB 的 `libjsoncpp.so`，Ghidra 已热）：
+
+```
+open_binary        189 ms
+list_procedures  28447 ms   ← Ghidra 冷启动 + 分析全在这里
+batch_decompile       62 ms   （1 个地址）
+batch_decompile       65 ms   （8 个地址，≈8 ms/地址）
+```
+
+真正的成本是 **Ghidra 冷启动**（265 KB 约 28 s，16.8 MB 的 `.so` 实测 508 s），而
+`batch_decompile` 常常就是 `open_binary` 之后**第一个取数的调用**，于是它一个人背下了
+整个冷启动 —— 看起来就像「批量反编译老是超时」。
+
+两层超时，都要给够：
+
+| 层 | 默认 | 谁报的错 | 怎么抬 |
+|---|---|---|---|
+| 插件工具层 | `max(callTimeoutMs, ghidraStartupTimeoutMs)`，下限 **330 s** | `rea: tools/call timed out after …` | 配置 `callTimeoutMs` / `ghidraStartupTimeoutMs`，或单次传 `timeoutMs` |
+| REA 内部 | Ghidra 启动/分析绝对时限 **330 s** | `provider_timeout`，`timeout_ms: 330000` | 配置 `ghidraStartupTimeoutMs`（大目标建议 `10800000` = 3 小时） |
+
+> 工具层的下限就是对齐 REA 那个 330 s 的。**以前它写死 300 s，比 REA 自己还紧**，
+> 所以冷启动的批量反编译在 300 s 被插件先掐断，你只能看到一句没有信息量的
+> `rea: tools/call timed out`，永远等不到 REA 的结论（成功或 `provider_timeout`）。
+> 现在两个值联动：抬 `ghidraStartupTimeoutMs`，工具层跟着抬。
+
+另外注意 `list_procedures` 在 850 个函数的 `.so` 上输出 **278 KB**，超过默认
+`maxBytes: 80000` 会被截断——想按函数清单批量反编译，记得同时调大 `maxBytes`。
 
 ## 踩过的三个坑（都是实测踩出来的）
 
