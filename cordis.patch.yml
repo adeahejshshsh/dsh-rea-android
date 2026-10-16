@@ -1,0 +1,42 @@
+# dsh-rea bundle patch: inserts this plugin into a profile's layer stack.
+#
+# 只插入本插件自身；REA 的 170 个 MCP 工具不在这里全量注册（全量 tool list
+# 约 1.95 MB / ~55.8 万 token，会把上下文直接撑爆）。插件改用 4 个轻量工具
+# 作为闸门：rea_tools（检索）/ rea_call（调用任意 REA MCP 工具）/ rea_cli /
+# rea_status。想全量注册见 README 的「全量模式」一节。
+- insert:
+    - id: dsh-rea
+      name: 'dsh-rea'
+      config:
+        enabled: true
+        # 留空则自动解析：环境变量 DSH_REA_ENTRY / REA_ENTRY →
+        # <插件目录>/vendor/node_modules/rea-agents/scripts/rea.mjs → PATH 上的 rea
+        reaEntry: ''
+        # 留空则自动解析：DSH_REA_NODE / REA_NODE_EXEC_PATH → PATH 上的 node
+        # （Android 上必须给真 node 路径：process.execPath 会指向 linker64）
+        nodeExecPath: ''
+        callTimeoutMs: 300000
+        maxResultBytes: 80000
+        # jadx-headless-mcp 0.7.1 的 fat jar（APK 类/方法反编译用）。
+        # 留空则自动解析：环境变量 REA_JADX_MCP_JAR →
+        # $DSH_HOME/plugins/dsh-rea/vendor/jadx/jadx-headless-mcp-0.7.1-all.jar → 代码目录下的同名路径。
+        # 装上它就自动启用：插件会顺带放行 REA 的 JADX 宿主门禁（android）。
+        jadxMcpJar: ''
+        # 给 JVM 的 -Djava.io.tmpdir（留空则自动挑一个真实存在的可写目录）。
+        # 本机 JDK 的 java.io.tmpdir 硬编码指向不存在的 /data/data/com.termux/...，
+        # 不给它的话 jadx 会以 ExceptionInInitializerError（message=null）失败。
+        javaTmpDir: ''
+        # Ghidra 原生引擎的安装根（含 Ghidra/application.properties），作为 GHIDRA_INSTALL_DIR 传给 REA。
+        # 留空则自动解析：环境变量 DSH_REA_GHIDRA_DIR / GHIDRA_INSTALL_DIR →
+        # $DSH_HOME/plugins/dsh-rea/vendor/ghidra/ghidra_12.1.4_PUBLIC → 代码目录下的同名路径。
+        # 注意：官方发布包**不含** linux/arm64 原生反编译器，aarch64 上必须自己编（见 README）。
+        ghidraInstallDir: ''
+        # Ghidra 12.1.4 硬要求 JDK 21+（本机 PATH 上的 java 是 17，不够），作为 JAVA_HOME 传给 REA。
+        # 留空则自动解析：DSH_REA_JAVA_HOME → $PREFIX/lib/jvm/java-21-openjdk → JAVA_HOME。
+        javaHome: ''
+        # Ghidra 的启动/分析**绝对时限**（毫秒），作为 REA_GHIDRA_STARTUP_TIMEOUT_MS 注入。
+        # 0 = 用 REA 默认值，只有 330 秒 —— 16.8MB 的 .so 实测需 8 分 19 秒，必然超时。
+        # 大目标建议 10800000（3 小时）。上限约 24.8 天（32 位定时器边界）。
+        ghidraStartupTimeoutMs: 0
+        # 给 Ghidra 的 JVM 堆（本机 11.6GB 内存，默认 1/4）。需要时用环境变量：
+        #   JAVA_TOOL_OPTIONS='-Xmx6g'（也可写 -Djava.io.tmpdir=...）

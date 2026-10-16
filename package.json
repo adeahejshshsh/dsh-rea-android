@@ -1,0 +1,38 @@
+{
+  "name": "dsh-rea",
+  "version": "0.1.0",
+  "description": "REA (Reverse Engineer Anything) bridge for DSH: four lean tools over REA's 170-tool MCP server, with the Android execPath fix built in.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./setup.mjs": "./setup.mjs",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "lib",
+    "tools",
+    "cordis.patch.yml",
+    "setup.mjs",
+    "README.md"
+  ],
+  "scripts": {
+    "setup": "node setup.mjs",
+    "smoke": "node tests/smoke.mjs"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dsh": {
+    "id": "dsh-rea",
+    "name": "REA 逆向桥",
+    "version": "0.1.0",
+    "permissions": "子进程, 工具注册",
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
