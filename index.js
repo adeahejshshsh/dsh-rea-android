@@ -31,10 +31,12 @@ import {
   PLUGIN_DIR,
   applyExecPathPatch,
   applyGhidraPatch,
+  applyGhidraTrimPatch,
   applyJadxHostGatePatch,
   effectiveCallTimeoutMs,
   ghidraNativeState,
   ghidraPatchState,
+  ghidraTrimState,
   jadxGateState,
   patchState,
   reaRootOf,
@@ -61,6 +63,9 @@ const DEFAULTS = {
   javaHome: "",
   // Ghidra 的启动/分析绝对时限（毫秒）。0 = 用 REA 默认（只有 330 秒，大目标必超时）。
   ghidraStartupTimeoutMs: 0,
+  // 分析前要关掉的 Ghidra analyzer（逗号分隔）。空 = Ghidra 默认集合，行为不变。
+  // 实测 6.9 MB 的 .so：默认 305 s → 关 Stack + Basic Constant Reference 后 121 s。
+  ghidraTrimAnalyzers: "",
   callTimeoutMs: 300_000,
   maxResultBytes: 80_000,
   listTimeoutMs: 60_000,
@@ -92,6 +97,7 @@ class ReaMcpClient {
     this.ghidraInstallDir = options.ghidraInstallDir ?? "";
     this.javaHome = options.javaHome ?? "";
     this.ghidraStartupTimeoutMs = Number(options.ghidraStartupTimeoutMs) || 0;
+    this.ghidraTrimAnalyzers = String(options.ghidraTrimAnalyzers ?? "");
     this.callTimeoutMs = options.callTimeoutMs;
     this.listTimeoutMs = options.listTimeoutMs;
     this.startupTimeoutMs = options.startupTimeoutMs;
@@ -130,6 +136,8 @@ class ReaMcpClient {
     if (this.ghidraStartupTimeoutMs > 0) {
       env.REA_GHIDRA_STARTUP_TIMEOUT_MS = String(this.ghidraStartupTimeoutMs);
     }
+    // 分析器裁剪：REA 的 GhidraLauncher 认这个变量，非空时才多一个 -preScript。
+    if (this.ghidraTrimAnalyzers !== "") env.REA_GHIDRA_TRIM_ANALYZERS = this.ghidraTrimAnalyzers;
     const jvmOptions = javaToolOptions(this.javaTmpDir);
     if (jvmOptions !== "") env.JAVA_TOOL_OPTIONS = jvmOptions;
     this.log(`rea: spawning ${this.node} ${this.entry} mcp`);
@@ -407,6 +415,12 @@ export function apply(ctx, config = {}) {
   const ghidraInstallDir = resolveGhidraInstallDir(settings);
   const javaHome = resolveJavaHome(settings);
   const ghidraStartupTimeoutMs = Number(settings.ghidraStartupTimeoutMs) || 0;
+  // 逗号分隔的 analyzer 名；空 = 不动 Ghidra 默认集合。
+  const ghidraTrimAnalyzers = String(settings.ghidraTrimAnalyzers ?? "")
+    .split(",")
+    .map((name) => name.trim())
+    .filter((name) => name !== "")
+    .join(",");
 
   try {
     if (reaEntry === "") {
@@ -439,6 +453,19 @@ export function apply(ctx, config = {}) {
       } else if (!gate.ok) {
         ctx.logger?.warn?.(`[dsh-rea] JADX 门禁补丁跳过（${gate.reason}）`);
       }
+      // Ghidra 分析器裁剪：把插件自带的 -preScript 投放到 REA 的 bridge/ghidra/ 并给
+      // GhidraLauncher 插一个开关。默认不关任何分析器，没配时命令行逐字节不变。
+      const trim = applyGhidraTrimPatch(reaEntry, {
+        allowOutsideVendor: settings.allowPatchOutsideVendor === true,
+      });
+      if (trim.ok && trim.changed.length > 0) {
+        ctx.logger?.info?.("[dsh-rea] 已装好 Ghidra 分析器裁剪钩子（默认不生效）");
+      } else if (!trim.ok) {
+        ctx.logger?.warn?.(`[dsh-rea] 分析器裁剪钩子跳过（${trim.reason}）`);
+      }
+      if (trim.ok && ghidraTrimAnalyzers !== "") {
+        ctx.logger?.info?.(`[dsh-rea] Ghidra 分析器已裁剪：${ghidraTrimAnalyzers}`);
+      }
       // Ghidra 链路：REA 的「平台→原生工具目录」与「平台→可执行格式」两张表里都没有 android，
       // 于是安卓上 ghidra-platform / ghidra-architecture / ghidra-native_decompiler 三条全红。
       // 补两行放行（二进制仍是本机自己编的 aarch64 那份）。
@@ -465,6 +492,7 @@ export function apply(ctx, config = {}) {
     ghidraInstallDir,
     javaHome,
     ghidraStartupTimeoutMs,
+    ghidraTrimAnalyzers,
     callTimeoutMs: Number(settings.callTimeoutMs) || DEFAULTS.callTimeoutMs,
     listTimeoutMs: DEFAULTS.listTimeoutMs,
     startupTimeoutMs: DEFAULTS.startupTimeoutMs,
@@ -530,6 +558,7 @@ export function apply(ctx, config = {}) {
         ghidra: (() => {
           const native = ghidraNativeState(ghidraInstallDir);
           const patched = ghidraPatchState(reaEntry).patched;
+          const trim = ghidraTrimState(reaEntry);
           return {
             installDir: ghidraInstallDir || null,
             installDirConfigured: ghidraInstallDir !== "",
@@ -539,6 +568,9 @@ export function apply(ctx, config = {}) {
             javaHome: javaHome || null,
             java21: javaHome !== "",
             startupTimeoutMs: ghidraStartupTimeoutMs || null,
+            // 分析器裁剪：hook = 钩子已装（不等于已裁剪），analyzers 才是实际关掉的那些。
+            trimHook: trim.patched && trim.script,
+            trimAnalyzers: ghidraTrimAnalyzers === "" ? null : ghidraTrimAnalyzers.split(","),
             ready: ghidraInstallDir !== "" && native.present && patched && javaHome !== "",
           };
         })(),
@@ -737,6 +769,7 @@ export function apply(ctx, config = {}) {
       if (ghidraStartupTimeoutMs > 0) {
         autoEnv.REA_GHIDRA_STARTUP_TIMEOUT_MS = String(ghidraStartupTimeoutMs);
       }
+      if (ghidraTrimAnalyzers !== "") autoEnv.REA_GHIDRA_TRIM_ANALYZERS = ghidraTrimAnalyzers;
       const jvmOptions = javaToolOptions(javaTmpDir);
       if (jvmOptions !== "") autoEnv.JAVA_TOOL_OPTIONS = jvmOptions;
       const env = { ...process.env, ...autoEnv, ...extraEnv };

@@ -401,6 +401,45 @@ REA_GHIDRA_STARTUP_TIMEOUT_MS=10800000 JAVA_TOOL_OPTIONS='-Xmx6g' \
   node <REA>/scripts/rea.mjs analyze <目标.so> --format json
 ```
 
+### 分析太慢？关掉两个分析器，省 2.5×
+
+那 508 秒 / 312 秒不是 I/O、不是 JVM，**就是 Ghidra 默认分析器集合**。Ghidra 自己在
+`ghidra.log` 里把每一秒都记着，同一个目标（6.9 MB 的 `payload.so`）实测：
+
+| Analyzer | 默认 | 说明 |
+|---|---|---|
+| **Stack** | 101.1 s | 预先算栈变量引用，喂给反编译器 |
+| **Basic Constant Reference Analyzer** | 91.3 s | 常量传播出来的引用 |
+| Decompiler Switch Analysis | 40.8 s | 跳表恢复（**别关**，REA 的 `jump_table_evidence` 靠它） |
+| GCC Exception Handlers | 21.5 s | |
+| Disassemble Entry Points | 20.9 s | |
+| 其余 23 个 | ≈36 s | |
+| **合计** | **305 s** | |
+
+前两个加起来占 63%，而它们只让伪代码**更好读**（栈变量类型、常量传播），不产出结论。
+关掉的实测效果（同一目标、同一 JVM 参数，只改这一项）：
+
+| 配置 | 分析耗时 | 加速 |
+|---|---|---|
+| 默认 | 305 s | — |
+| `Stack` + `Basic Constant Reference Analyzer` | **121 s** | **2.5×** |
+| 再关 `Decompiler Switch Analysis` | 79 s | 3.9× |
+
+```yaml
+ghidraTrimAnalyzers: 'Stack,Basic Constant Reference Analyzer'
+```
+
+**默认是空的**（Ghidra 默认集合，行为一字不变）——因为这会让伪代码的注释变少，
+该不该吃这个亏由你定。`rea_status` 的 `ghidra.trimAnalyzers` 会显示当前实际关掉了哪些。
+
+机制：插件把 `bridge/ReaGhidraTrimAnalyzers.java` 投放到 REA 的 `bridge/ghidra/`（那个目录
+本来就在 `-scriptPath` 上），并给 REA 的 `GhidraLauncher` 插一个 `-preScript`；脚本在
+「导入之后、自动分析之前」把 `Program.ANALYSIS_PROPERTIES` 里对应的开关置 false。
+没配裁剪时命令行与原来逐字节相同。
+
+> 分析器名字必须**一字不差**（`Stack`、`Basic Constant Reference Analyzer`）。
+> 写错的后果是静默不生效——去 `$HOME/tmp/rea-ghidra-*/ghidra.log` 里搜 `REA analyzer trim` 确认。
+
 ### 剥符号的库怎么定位逻辑
 
 符号被剥光时（通常只剩 `JNI_OnLoad`），按**字符串 → 交叉引用 → 批量反编译**走：

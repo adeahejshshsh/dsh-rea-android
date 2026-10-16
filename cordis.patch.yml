@@ -38,5 +38,15 @@
         # 0 = 用 REA 默认值，只有 330 秒 —— 16.8MB 的 .so 实测需 8 分 19 秒，必然超时。
         # 大目标建议 10800000（3 小时）。上限约 24.8 天（32 位定时器边界）。
         ghidraStartupTimeoutMs: 0
+        # 分析前要关掉的 Ghidra analyzer，逗号分隔。空 = Ghidra 默认集合，行为一字不变。
+        # 为什么值得关：默认集合里 Stack 与 Basic Constant Reference Analyzer 在大型/混淆
+        # 二进制上占掉总分析时间的 60% 以上。实测 6.9 MB 的 .so（同一个目标，只改这一项）：
+        #     默认                                  305 s
+        #     关 Stack + Basic Constant Reference   121 s   （2.5×，推荐）
+        #     再关 Decompiler Switch Analysis        79 s   （3.9×，但会丢掉跳表恢复）
+        # 前两个只影响伪代码的「注释丰富度」（栈变量类型、常量传播），函数/字符串清单不受影响；
+        # Decompiler Switch Analysis 关掉会让 REA 的 jump_table_evidence 失去依据，别乱关。
+        # 示例：ghidraTrimAnalyzers: 'Stack,Basic Constant Reference Analyzer'
+        ghidraTrimAnalyzers: ''
         # 给 Ghidra 的 JVM 堆（本机 11.6GB 内存，默认 1/4）。需要时用环境变量：
         #   JAVA_TOOL_OPTIONS='-Xmx6g'（也可写 -Djava.io.tmpdir=...）

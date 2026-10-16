@@ -69,6 +69,8 @@ check("REA 版本可读", typeof parsed.rea.version === "string");
 check("node 不是 linker64", !/linker64$/u.test(parsed.node.resolved), parsed.node.resolved);
 check("execPath 补丁已覆盖", parsed.androidExecPathPatch.complete === true,
   `${parsed.androidExecPathPatch.applied}/${parsed.androidExecPathPatch.expected}`);
+check("Ghidra 分析器裁剪钩子已装", parsed.ghidra.trimHook === true);
+check("默认不关任何分析器", parsed.ghidra.trimAnalyzers === null);
 
 const list = await call("rea_tools", { limit: 5 });
 process.stdout.write(`\n--- rea_tools (前 5) ---\n${list}\n\n`);
