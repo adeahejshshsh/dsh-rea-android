@@ -387,4 +387,7 @@ REA_GHIDRA_STARTUP_TIMEOUT_MS=10800000 JAVA_TOOL_OPTIONS='-Xmx6g' \
 
 ## 许可
 
-本插件 MIT。REA 自身 MIT；其中的第三方工具（IDA/Hopper/JEB 等）各自授权，本插件不提供任何授权。
+本插件 MIT，全文见 [LICENSE](LICENSE)。REA 自身 MIT；其中的第三方工具（IDA/Hopper/JEB 等）各自授权，本插件不提供任何授权。
+
+> **合规提示**：REA 仅用于你拥有或已获授权分析的软件（研究、教育、互操作性、软件保存）。
+> 使用前请阅读上游 [DISCLAIMER.md](https://github.com/morluto/rea/blob/main/DISCLAIMER.md)。
